@@ -1,0 +1,317 @@
+const express = require('express');
+const app = express();
+const PORT = 3000;
+
+app.use(express.static('public'));
+
+app.get('/api/hello', (req, res) => {
+  res.json({ message: "Hello from the backend!" });
+});
+
+app.listen(PORT, () => {
+  console.log(`Server running at http://localhost:${PORT}`);
+});
+<!DOCTYPE html>
+<html>
+<head>
+  <title>My Web App</title>
+</head>
+<body>
+  <h1>Hello, Web App!</h1>
+  <button onclick="fetchMessage()">Talk to backend</button>
+  <p id="response"></p>
+  <script>
+    function fetchMessage() {
+      fetch('/api/hello')
+        .then(res => res.json())
+        .then(data => {
+          document.getElementById('response').innerText = data.message;
+        });
+    }
+  </script>
+</body>
+</html>
+const express = require('express');
+const http = require('http');
+const socketIo = require('socket.io');
+const cors = require('cors');
+const path = require('path');
+
+const app = express();
+const server = http.createServer(app);
+const io = socketIo(server, {
+  cors: {
+    origin: '*',
+  }
+});
+
+app.use(cors());
+app.use(express.static(path.join(__dirname, '../frontend/build')));
+
+const GAME_WIDTH = 800;
+const GAME_HEIGHT = 600;
+
+function getRandomPosition() {
+  return {
+    x: Math.floor(Math.random() * (GAME_WIDTH - 40)) + 20,
+    y: Math.floor(Math.random() * (GAME_HEIGHT - 40)) + 20
+  }
+}
+
+io.on('connection', (socket) => {
+  // Initial positions
+  let police = { ...getRandomPosition(), speed: 5 };
+  let thief = { ...getRandomPosition(), speed: 4 };
+  let score = 0;
+
+  socket.emit('init', { police, thief, score });
+
+  socket.on('move-police', (direction) => {
+    // Move police based on direction
+    if (direction === 'up') police.y -= police.speed;
+    if (direction === 'down') police.y += police.speed;
+    if (direction === 'left') police.x -= police.speed;
+    if (direction === 'right') police.x += police.speed;
+    // Keep inside bounds
+    police.x = Math.max(0, Math.min(GAME_WIDTH, police.x));
+    police.y = Math.max(0, Math.min(GAME_HEIGHT, police.y));
+
+    // Thief auto-moves away from police
+    const dx = thief.x - police.x;
+    const dy = thief.y - police.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist > 0) {
+      thief.x += (dx / dist) * thief.speed;
+      thief.y += (dy / dist) * thief.speed;
+    }
+
+    // Keep thief inside bounds
+    thief.x = Math.max(0, Math.min(GAME_WIDTH, thief.x));
+    thief.y = Math.max(0, Math.min(GAME_HEIGHT, thief.y));
+
+    // Check if police catches thief
+    if (Math.abs(police.x - thief.x) < 32 && Math.abs(police.y - thief.y) < 32) {
+      score += 1;
+      police = { ...getRandomPosition(), speed: 5 };
+      thief = { ...getRandomPosition(), speed: 4 };
+    }
+
+    socket.emit('state', { police, thief, score });
+  });
+
+  socket.on('restart', () => {
+    police = { ...getRandomPosition(), speed: 5 };
+    thief = { ...getRandomPosition(), speed: 4 };
+    score = 0;
+    socket.emit('init', { police, thief, score });
+  });
+});
+
+const PORT = process.env.PORT || 4000;
+server.listen(PORT, () => {
+  console.log(`Backend server running on port ${PORT}`);
+});
+{
+  "name": "police-thief-backend",
+  "version": "1.0.0",
+  "main": "server.js",
+  "license": "MIT",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "http": "^0.0.1-security",
+    "socket.io": "^4.7.4"
+  },
+  "scripts": {
+    "start": "node server.js"
+  }
+}
+{
+  "name": "police-thief-frontend",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "socket.io-client": "^4.7.4"
+  },
+  "scripts": {
+    "start": "react-scripts start",
+    "build": "react-scripts build"
+  }
+}
+import React from 'react';
+import ReactDOM from 'react-dom/client';
+import App from './App';
+
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(<App />);
+import React, { useEffect, useRef, useState } from 'react';
+import io from 'socket.io-client';
+import GameCanvas from './components/GameCanvas';
+
+const socket = io('http://localhost:4000');
+
+function App() {
+  const [gameState, setGameState] = useState(null);
+
+  useEffect(() => {
+    socket.on('init', (data) => setGameState(data));
+    socket.on('state', (data) => setGameState(data));
+    socket.emit('restart');
+    return () => {
+      socket.off('init');
+      socket.off('state');
+    };
+  }, []);
+
+  const handleKeyDown = (e) => {
+    if (!gameState) return;
+    if (['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'].includes(e.key)) {
+      const dir = e.key.replace('Arrow', '').toLowerCase();
+      socket.emit('move-police', dir);
+    }
+    if (e.key === 'r') {
+      socket.emit('restart');
+    }
+  };
+
+  useEffect(() => {
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  });
+
+  return (
+    <div style={{ textAlign: 'center' }}>
+      <h1>🚓 Police vs Thief 🦹‍♂️</h1>
+      <p>Use arrow keys to move. Press 'R' to restart.</p>
+      {gameState && (
+        <>
+          <GameCanvas police={gameState.police} thief={gameState.thief} />
+          <h2>Score: {gameState.score}</h2>
+        </>
+      )}
+    </div>
+  );
+}
+
+export default App;
+import React, { useEffect, useRef } from 'react';
+import policeImg from '../assets/police.png';
+import thiefImg from '../assets/thief.png';
+import bgImg from '../assets/bg.png';
+
+const WIDTH = 800;
+import React, { useEffect, useRef } from 'react';
+import policeImg from '../assets/police.png';
+import thiefImg from '../assets/thief.png';
+import bgImg from '../assets/bg.png';
+
+const WIDTH = 800;
+const HEIGHT = 600;
+
+function drawSprite(ctx, img, x, y) {
+  ctx.drawImage(img, x - 16, y - 16, 32, 32);
+}
+
+function GameCanvas({ police, thief }) {
+  const canvasRef = useRef();
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const bg = new window.Image();
+    bg.src = bgImg;
+    const policeSprite = new window.Image();
+    policeSprite.src = policeImg;
+    const thiefSprite = new window.Image();
+    thiefSprite.src = thiefImg;
+
+    bg.onload = () => {
+      ctx.drawImage(bg, 0, 0, WIDTH, HEIGHT);
+      drawSprite(ctx, policeSprite, police.x, police.y);
+      drawSprite(ctx, thiefSprite, thief.x, thief.y);
+    };
+    policeSprite.onload = () => {
+      ctx.drawImage(bg, 0, 0, WIDTH, HEIGHT);
+      drawSprite(ctx, policeSprite, police.x, police.y);
+      drawSprite(ctx, thiefSprite, thief.x, thief.y);
+    };
+    thiefSprite.onload = () => {
+      ctx.drawImage(bg, 0, 0, WIDTH, HEIGHT);
+      drawSprite(ctx, policeSprite, police.x, police.y);
+      drawSprite(ctx, thiefSprite, thief.x, thief.y);
+    };
+    // Draw immediately if already loaded
+    if (bg.complete && policeSprite.complete && thiefSprite.complete) {
+      ctx.drawImage(bg, 0, 0, WIDTH, HEIGHT);
+      drawSprite(ctx, policeSprite, police.x, police.y);
+      drawSprite(ctx, thiefSprite, thief.x, thief.y);
+    }
+  }, [police, thief]);
+
+  return (
+    <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} style={{ border: '2px solid #000' }} />
+  );
+}
+
+export default GameCanvas;
+const HEIGHT = 600;
+
+function drawSprite(ctx, img, x, y) {
+  ctx.drawImage(img, x - 16, y - 16, 32, 32);
+}
+
+function GameCanvas({ police, thief }) {
+  const canvasRef = useRef();
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext('2d');
+    const bg = new window.Image();
+    bg.src = bgImg;
+    const policeSprite = new window.Image();
+    policeSprite.src = policeImg;
+    const thiefSprite = new window.Image();
+    thiefSprite.src = thiefImg;
+
+    bg.onload = () => {
+      ctx.drawImage(bg, 0, 0, WIDTH, HEIGHT);
+      drawSprite(ctx, policeSprite, police.x, police.y);
+      drawSprite(ctx, thiefSprite, thief.x, thief.y);
+    };
+    policeSprite.onload = () => {
+      ctx.drawImage(bg, 0, 0, WIDTH, HEIGHT);
+      drawSprite(ctx, policeSprite, police.x, police.y);
+      drawSprite(ctx, thiefSprite, thief.x, thief.y);
+    };
+    thiefSprite.onload = () => {
+      ctx.drawImage(bg, 0, 0, WIDTH, HEIGHT);
+      drawSprite(ctx, policeSprite, police.x, police.y);
+      drawSprite(ctx, thiefSprite, thief.x, thief.y);
+    };
+    // Draw immediately if already loaded
+    if (bg.complete && policeSprite.complete && thiefSprite.complete) {
+      ctx.drawImage(bg, 0, 0, WIDTH, HEIGHT);
+      drawSprite(ctx, policeSprite, police.x, police.y);
+      drawSprite(ctx, thiefSprite, thief.x, thief.y);
+    }
+  }, [police, thief]);
+
+  return (
+    <canvas ref={canvasRef} width={WIDTH} height={HEIGHT} style={{ border: '2px solid #000' }} />
+  );
+}
+
+export default GameCanvas;
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Police vs Thief Game</title>
+    <meta name="viewport" content="width=800, initial-scale=1" />
+  </head>
+  <body>
+    <div id="root"></div>
+  </body>
+</html>
